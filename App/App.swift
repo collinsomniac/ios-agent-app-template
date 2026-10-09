@@ -26,7 +26,10 @@ enum Routes {
     static func handle(_ method: String, _ path: String, _ q: [String: String], _ b: [String: Any]) async -> (Int, Any) {
         switch (method, path) {
         case ("GET", "/ping"): return (200, ["ok": true, "app": Bundle.main.bundleIdentifier ?? "?"])
-        case ("GET", "/device"): return (200, await MainActor.run { DeviceProbe.snapshot() })
+        case ("GET", "/device"):
+            // JSON-encode on the main actor: [String: Any] is not Sendable
+            let d = await MainActor.run { () -> Data in (try? JSONSerialization.data(withJSONObject: ControlServer.sanitize(DeviceProbe.snapshot()))) ?? Data() }
+            return (200, (try? JSONSerialization.jsonObject(with: d)) ?? [:])
         case ("GET", "/log"): return (200, ["lines": Log.shared.all()])
         case ("GET", "/rust"): return (200, ["core": RustCore.version(), "sum": RustCore.add(2, 40)])
         default: return (404, ["error": "no route \(method) \(path)"])

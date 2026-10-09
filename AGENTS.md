@@ -16,6 +16,8 @@ One CI round trip costs ~10 minutes; one grep costs seconds.
 - Xcode 27 ships the Metal compiler separately: CI must run `xcodebuild -downloadComponent MetalToolchain` before building anything with `.metal` sources (MLX does).
 - Packages with Swift macros need `-skipMacroValidation` (and `-skipPackagePluginValidation`) in CI.
 - Commit *all* changed files: `git add -A`. A workflow change left unstaged means CI runs the old workflow (or no run if the trigger paths didn't match).
+- `SWIFT_VERSION` is "5.0" on purpose: Swift 6 mode turns every `[String: Any]` crossing an actor/`MainActor.run` boundary into a hard error. Return JSON `Data` (or an `@unchecked Sendable` box) across isolation boundaries instead.
+- Verify Metal API names against the SDK (e.g. `MTLDevice.supportsBFloat16` does not exist). When in doubt, guard with `responds(to:)` or leave it out.
 - The trigger `paths:` filter decides whether a push builds at all. Tooling-only pushes don't trigger builds by design.
 - Don't add capabilities free teams can't have (push, iCloud, app groups, associated domains, Sign in with Apple) — re-signing fails or strips them.
 - Loopback server: bind `127.0.0.1` explicitly (`requiredLocalEndpoint`), require a token, and add `NSLocalNetworkUsageDescription` anyway.
