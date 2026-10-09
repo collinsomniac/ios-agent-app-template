@@ -1,0 +1,98 @@
+name: build-ipa
+on:
+  push:
+    branches: [main]
+    paths: ["App/**", "rust/**", "project.yml", ".github/workflows/build.yml"]
+  workflow_dispatch: {}
+permissions:
+  contents: write
+concurrency:
+  group: build-ipa
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          # Xcode 27 ships the Metal compiler as a separate component; MLX compiles .metal sources
+          xcodebuild -downloadComponent MetalToolchain || xcodebuild -downloadComponent metalToolchain
+          xcrun -sdk iphoneos metal --version || true
+      - name: Cache SwiftPM + cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            build/SourcePackages
+            ~/.cargo/registry
+            rust/target
+          key: deps-${{ runner.os }}-${{ hashFiles('project.yml', 'rust/Cargo.toml') }}
+      - name: Rust core (aarch64-apple-ios)
+        if: hashFiles('rust/Cargo.toml') != ''
+        run: |
+          rustup target add aarch64-apple-ios
+          cd rust && cargo build --release --target aarch64-apple-ios
+          ls -la target/aarch64-apple-ios/release/libcore.a
+      - name: Generate project
+        run: xcodegen generate
+      - name: Archive (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild -project AgentApp.xcodeproj -scheme AgentApp -configuration Release \
+            -sdk iphoneos -destination "generic/platform=iOS" \
+            -clonedSourcePackagesDirPath build/SourcePackages \
+            -skipMacroValidation -skipPackagePluginValidation \
+            -archivePath "$RUNNER_TEMP/AgentApp.xcarchive" archive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            2>&1 | tee "$RUNNER_TEMP/build.log" | grep -E "error:|warning: .*(deprecated|unavailable)|BUILD|ARCHIVE" | head -200
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with: { name: build-log, path: "${{ runner.temp }}/build.log" }
+      - name: Package IPA + SideStore source
+        id: pkg
+        run: |
+          set -euo pipefail
+          APP=$(find "$RUNNER_TEMP/AgentApp.xcarchive/Products/Applications" -maxdepth 1 -name "*.app" | head -1)
+          rm -rf "$APP/_CodeSignature" "$APP/embedded.mobileprovision"
+          # Ad-hoc sign WITH entitlements: SideStore/AltStore read requested entitlements from the
+          # binary's signature when re-signing; an unsigned binary requests none.
+          find "$APP/Frameworks" -name "*.framework" -maxdepth 1 -exec codesign -f -s - {} \; 2>/dev/null || true
+          codesign -f -s - --entitlements App/App.entitlements "$APP"
+          codesign -d --entitlements - "$APP" 2>&1 | tail -8
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Info.plist")
+          BUILD=${{ github.run_number }}
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" "$APP/Info.plist"
+          SHORT=$(git rev-parse --short HEAD)
+          NAME="AgentApp-$VERSION-$BUILD.ipa"
+          mkdir -p "$RUNNER_TEMP/pkg/Payload"; cp -R "$APP" "$RUNNER_TEMP/pkg/Payload/"
+          (cd "$RUNNER_TEMP/pkg" && zip -qry "$RUNNER_TEMP/$NAME" Payload)
+          SIZE=$(stat -f%z "$RUNNER_TEMP/$NAME")
+          TAG="build-$BUILD"
+          export BID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist")
+          python3 - "$NAME" "$SIZE" "$TAG" "$VERSION.$BUILD" <<'PY'
+          import json, sys, datetime, os
+          name, size, tag, ver = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          owner = repo.split("/")[0]
+          bid = os.environ.get("BID", "")
+          src = {"name": f"{repo} builds", "identifier": f"io.github.{owner.lower()}.{repo.split('/')[1].lower()}.source",
+                 "apps": [{"name": "AgentApp", "bundleIdentifier": bid,
+                           "developerName": owner, "localizedDescription": "Built by CI, re-signed on device.",
+                           "iconURL": "", "versions": [{"version": ver, "date": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                           "downloadURL": f"https://github.com/{repo}/releases/download/{tag}/{name}", "size": size}]}]}
+          json.dump(src, open(os.path.join(os.environ["RUNNER_TEMP"], "sidestore-source.json"), "w"), indent=2)
+          PY
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"; echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - name: Release
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release create "${{ steps.pkg.outputs.tag }}" "$RUNNER_TEMP/${{ steps.pkg.outputs.name }}" "$RUNNER_TEMP/sidestore-source.json" \
+            --title "${{ steps.pkg.outputs.tag }}" --notes "Unsigned IPA from ${GITHUB_SHA}. Install/update via SideStore." --latest
+          # stable URL for the SideStore source: always points at the latest release asset
+          echo "source: https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/sidestore-source.json" >> "$GITHUB_STEP_SUMMARY"

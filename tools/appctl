@@ -1,0 +1,13 @@
+#!/bin/sh
+# appctl — call the app's loopback control API from a terminal on the same phone (iSH, a-Shell, ...).
+#   appctl ping | device | log | <METHOD> <path> [json-body]
+# Token: export APP_TOKEN=... (copy it from the app), or put it in ~/.app_token. Port: APP_PORT (default 8765).
+H=http://127.0.0.1:${APP_PORT:-8765}
+T=${APP_TOKEN:-$(cat ~/.app_token 2>/dev/null)}
+case "$1" in
+  ping) curl -s -m 5 "$H/ping" ;;
+  device|log) curl -s -m 30 -H "X-Token: $T" "$H/$1" ;;
+  GET|POST) curl -s -m "${TMO:-600}" -X "$1" -H "X-Token: $T" -H "Content-Type: application/json" ${3:+-d "$3"} "$H$2" ;;
+  *) sed -n 2,4p "$0" ;;
+esac
+echo

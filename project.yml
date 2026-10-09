@@ -1,0 +1,41 @@
+name: AgentApp
+options:
+  bundleIdPrefix: io.github.OWNER
+  deploymentTarget:
+    iOS: "18.0"
+targets:
+  AgentApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+    entitlements:
+      path: App/App.entitlements
+      properties:
+        com.apple.developer.kernel.increased-memory-limit: true
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: AgentApp
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        NSLocalNetworkUsageDescription: "This app runs a local control server so your assistant can drive it."
+        CFBundleURLTypes:
+          - CFBundleURLName: io.github.OWNER.agentapp
+            CFBundleURLSchemes: [agentapp]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.OWNER.agentapp
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: minimal
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGNING_ALLOWED: NO
+        SWIFT_OBJC_BRIDGING_HEADER: App/Bridging-Header.h
+        HEADER_SEARCH_PATHS: $(SRCROOT)/rust
+        LIBRARY_SEARCH_PATHS: $(SRCROOT)/rust/target/aarch64-apple-ios/release
+        OTHER_LDFLAGS: -lcore
+    # To add Swift packages (e.g. MLX), declare them under a top-level `packages:` key
+    # and list products here under `dependencies:` (see LoopLab's project.yml).

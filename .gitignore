@@ -1,0 +1,5 @@
+*.xcodeproj/
+build/
+rust/target/
+*.ipa
+.DS_Store
